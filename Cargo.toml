@@ -1,0 +1,16 @@
+[package]
+name = "pdfcon"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pdfium-render = { version = "0.8.29", features = ["static"] }
+lopdf = "0.36.0"
+flate2 = "1.1.1"
+image = { version = "0.25.6", features = ["png", "jpeg"] }
+oxipng = { version = "9.1.4" }
+mozjpeg = { version = "0.10.13" }
+rayon = { version = "1.10.0" }
+clap = { version = "4.5.34", features = ["cargo"] }
+indicatif = { version = "0.17.11" }
+num_cpus = { version = "1.16.0" }
