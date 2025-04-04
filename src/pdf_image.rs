@@ -1,5 +1,4 @@
-use std::io::{BufReader, BufWriter, Write};
-use std::marker::PhantomData;
+use std::io::{BufWriter, Write};
 
 use crate::error::PDFConError;
 use flate2::write::ZlibEncoder;
@@ -13,13 +12,38 @@ pub enum PDFConColorSpace {
 }
 
 impl PDFConColorSpace {
-    pub fn to_pdf_string(&self) -> (String, u32) {
+    pub fn to_pdf_format(&self) -> (Vec<u8>, u32) {
         match *self {
-            Self::RGB8 => ("DeviceRGB".to_string(), 8),
-            Self::RGB16 => ("DeviceRGB".to_string(), 16),
-            Self::L8 => ("DeviceGray".to_string(), 8),
-            Self::L16 => ("DeviceGray".to_string(), 16),
-            Self::CMYK => ("DeviceCMYK".to_string(), 4),
+            Self::RGB8 => (b"DeviceRGB".to_vec(), 8),
+            Self::RGB16 => (b"DeviceRGB".to_vec(), 16),
+            Self::L8 => (b"DeviceGray".to_vec(), 8),
+            Self::L16 => (b"DeviceGray".to_vec(), 16),
+            Self::CMYK => (b"DeviceCMYK".to_vec(), 4),
+        }
+    }
+}
+
+// We'll need to figure out its bit depth at some point. For now assume it's always 8 bits
+impl From<mozjpeg::ColorSpace> for PDFConColorSpace {
+    fn from(c: mozjpeg::ColorSpace) -> Self {
+        match c {
+            mozjpeg::ColorSpace::JCS_CMYK => Self::CMYK,
+            mozjpeg::ColorSpace::JCS_RGB => Self::RGB8,
+            mozjpeg::ColorSpace::JCS_GRAYSCALE => Self::L8,
+            _ => Self::RGB8,
+        }
+    }
+}
+
+impl From<image::ColorType> for PDFConColorSpace {
+    fn from(c: image::ColorType) -> Self {
+        match c {
+            image::ColorType::L16 => Self::L16,
+            image::ColorType::L8 => Self::L8,
+            image::ColorType::Rgb8 | image::ColorType::Rgba8 => Self::RGB8,
+            image::ColorType::Rgb16 | image::ColorType::Rgba16 => Self::RGB16,
+            image::ColorType::Rgb32F | image::ColorType::Rgba32F => Self::RGB16,
+            _ => unreachable!(),
         }
     }
 }
@@ -45,8 +69,9 @@ pub mod optimize {
     use crate::error::PDFConError;
     use flate2::Compression;
     use image::{self, ColorType};
+    use log::error;
     use mozjpeg;
-    use std::io::{BufReader, BufWriter, Read, Write};
+    use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom};
 
     pub enum ImageData {
         PNG(Vec<u8>, u32, u32, PDFConColorSpace),
@@ -146,9 +171,7 @@ pub mod optimize {
                     PDFConColorSpace::RGB16,
                 ))
             }
-            _ => unreachable!(
-                "We've covered all colorspaces. It shouldn't be possible to reach this arm"
-            ),
+            _ => unreachable!(),
         }
     }
 
@@ -161,7 +184,7 @@ pub mod optimize {
             {
                 Ok(d) => d,
                 Err(e) => {
-                    println!("Decompress err: {}", e.to_string());
+                    error!("Decompress err: {}", e.to_string());
                     return Err(PDFConError::MozDecompressBufferError);
                 }
             };
@@ -217,28 +240,25 @@ pub mod optimize {
                 .into_inner()
                 .map_err(|_| PDFConError::BufferInnerError)?;
 
-            let converted = match output_color_space {
-                mozjpeg::ColorSpace::JCS_GRAYSCALE => PDFConColorSpace::L8,
-                mozjpeg::ColorSpace::JCS_RGB => PDFConColorSpace::RGB8,
-                mozjpeg::ColorSpace::JCS_CMYK => PDFConColorSpace::CMYK,
-                _ => PDFConColorSpace::RGB8,
-            };
-
-            Ok(ImageData::MOZJPEG(content, width, height, converted))
+            Ok(ImageData::MOZJPEG(
+                content,
+                width,
+                height,
+                PDFConColorSpace::from(output_color_space),
+            ))
         });
 
         match result {
             Ok(r) => r,
             Err(e) => {
-                println!("MozJpeg failed: {:?}", e);
+                error!("MozJpeg failed: {:?}", e);
                 Err(PDFConError::MozUnwindError)
             }
         }
     }
 
-    pub fn jpeg(file: std::fs::File) -> Result<ImageData, PDFConError> {
-        let mut file_clone = file.try_clone()?;
-        let reader = BufReader::new(file);
+    pub fn jpeg(mut file: std::fs::File) -> Result<ImageData, PDFConError> {
+        let reader = BufReader::new(&file);
 
         let image = image::ImageReader::with_format(reader, image::ImageFormat::Jpeg);
         let decoder = image.decode()?;
@@ -248,20 +268,17 @@ pub mod optimize {
 
         drop(decoder);
 
+        file.seek(SeekFrom::Start(0))?;
+
+        let mut reader = BufReader::new(&file);
         let mut contents = Vec::new();
-        let _ = file_clone.read_to_end(&mut contents)?;
+        reader.read_to_end(&mut contents)?;
 
-        let converted = match color {
-            ColorType::L8 | ColorType::La8 => PDFConColorSpace::L8,
-            ColorType::L16 | ColorType::La16 => PDFConColorSpace::L16,
-            ColorType::Rgb8 | ColorType::Rgba8 => PDFConColorSpace::RGB8,
-            ColorType::Rgb16 | ColorType::Rgba16 => PDFConColorSpace::RGB16,
-            ColorType::Rgba32F | ColorType::Rgb32F => PDFConColorSpace::RGB16,
-            _ => unreachable!(
-                "We've covered all colorspaces. It shouldn't be possible to reach this arm"
-            ),
-        };
-
-        Ok(ImageData::JPEG(contents, width, height, converted))
+        Ok(ImageData::JPEG(
+            contents,
+            width,
+            height,
+            PDFConColorSpace::from(color),
+        ))
     }
 }

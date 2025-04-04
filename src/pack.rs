@@ -1,10 +1,11 @@
 use crate::pdf_image;
 use crate::{Run, error::PDFConError};
-use image;
-use indicatif::ProgressBar;
-use lopdf::{Document, Object, ObjectId, Stream, content, dictionary};
+use indicatif::{ProgressBar, ProgressStyle};
+use log::{error, info};
+use lopdf::content::Content;
+use lopdf::{Document, Object, Stream, content::Operation, dictionary};
 use rayon::prelude::*;
-use std::io::{BufWriter, Read, Write};
+use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -72,7 +73,7 @@ impl Pack {
             Ok(e) => e,
             Err(e) => {
                 // Error. Entry couldn't be read. This should be logged
-                println!("Failed to create image file from entry");
+                error!("Failed to create image file from entry");
                 return None;
             }
         };
@@ -81,7 +82,7 @@ impl Pack {
             Ok(ft) => ft,
             Err(e) => {
                 // Error: This should be handled or logged
-                println!("Failed to get file type");
+                error!("Failed to get file type");
                 return None;
             }
         };
@@ -98,7 +99,7 @@ impl Pack {
             "jpeg" | "jpg" => ImageType::JPG,
             _ => {
                 // File was not a supported image. This should be logged
-                println!("File type not supported");
+                error!("File type not supported");
                 return None;
             }
         };
@@ -113,7 +114,6 @@ impl Pack {
 
         let directory = std::fs::read_dir(&self.in_directory)?;
 
-        println!("Converting entries to image files");
         let mut files: Vec<ImageFile> = directory
             .filter_map(|e| {
                 let entry = self.image_file_from_entry(e)?;
@@ -125,16 +125,22 @@ impl Pack {
         files.par_sort_by_key(|k| k.location.to_owned());
 
         let total = files.len();
-        let pb: Arc<Mutex<ProgressBar>> = Arc::new(Mutex::new(
-            ProgressBar::new(total as u64).with_prefix("Processing Images: "),
-        ));
+        let pb = ProgressBar::new(total as u64)
+            .with_prefix("Processing Images")
+            .with_style(
+                ProgressStyle::with_template(
+                    "{prefix}: {wide_bar:.cyan/blue} {pos}/{len} ({elapsed})",
+                )
+                .unwrap(),
+            );
+        let pb: Arc<Mutex<ProgressBar>> = Arc::new(Mutex::new(pb));
         let pre_processed = files
             .par_iter()
             .filter_map(|image_file| {
                 match pb.lock() {
                     Ok(p) => p.inc(1),
                     Err(e) => {
-                        println!("Mutex poisoned: {}", e.to_string());
+                        error!("Mutex poisoned: {}", e.to_string());
                         pb.clear_poison();
                     }
                 }
@@ -143,7 +149,7 @@ impl Pack {
                         Ok(bytes) => Some(bytes),
                         Err(e) => {
                             // LOG and ignore
-                            println!("Failed to optimize image file: {}", e.to_string());
+                            error!("Failed to optimize image file: {}", e.to_string());
                             return None;
                         }
                     }
@@ -153,7 +159,7 @@ impl Pack {
                         Ok(bytes) => Some(bytes),
                         Err(e) => {
                             // LOG and ignore
-                            println!("Failed to read the file");
+                            error!("Failed to read the file");
                             return None;
                         }
                     }
@@ -161,12 +167,12 @@ impl Pack {
             })
             .collect::<Vec<pdf_image::optimize::ImageData>>();
 
-        pb.clear_poison();
-        pb.lock().unwrap().finish();
-
-        drop(pb);
-
-        let pb = ProgressBar::new(total as u64).with_prefix("Assemblying PDF: ");
+        match pb.lock() {
+            Ok(p) => {
+                p.finish();
+            }
+            Err(e) => error!("Failed to unlock progressbar: {}", e),
+        }
 
         // Use the latest PDF version
         let mut doc = Document::with_version("1.7");
@@ -175,7 +181,7 @@ impl Pack {
         // lopdf helps keep track of these. They're simple integers.
         // Calls to doc.new_object_id and doc.add_object produce a new object ID
         // Pages is the root node of the page tree
-        let mut pages_id = doc.new_object_id();
+        let pages_id = doc.new_object_id();
 
         // Content is a wrapper struct around an operations struct that contains a vector of operations
         // The operations struct contains a vector of operations that match up with a particular PDF operator and
@@ -188,24 +194,192 @@ impl Pack {
         // context. The stream dictionary is set internally by lopdf and normally doesn't need to be manually
         // manipulated. It contains keys such as Length, Filter, DecodeParams, etc.
         //let mut page_ids: Vec<_> = Vec::new();
+        let mut page_ids = Vec::new();
+        let mut parent = pages_id;
         for image_data in pre_processed {
             match image_data {
                 pdf_image::optimize::ImageData::PNG(compressed_data, width, height, color_type) => {
+                    let (color_type, bits) = color_type.to_pdf_format();
+                    let dic = dictionary!(
+                        "Type" => Object::Name(b"XObject".to_vec()),
+                        "Subtype" => Object::Name(b"Image".to_vec()),
+                        "Width" => width as u32,
+                        "Height" => height as u32,
+                        "ColorSpace" => Object::Name(color_type),
+                        "BitsPerComponent" => bits as u32,
+                        "Filter" => Object::Name(b"FlateDecode".to_vec())
+                    );
+                    let img_object = Stream::new(dic, compressed_data);
+                    let img_id = doc.add_object(img_object);
+                    let img_name = format!("X{}", img_id.0);
+
+                    let cm_operation = Operation::new(
+                        "cm",
+                        vec![
+                            (width as u32).into(),
+                            0.into(),
+                            0.into(),
+                            (height as u32).into(),
+                            0.into(),
+                            0.into(),
+                        ],
+                    );
+
+                    let do_operation =
+                        Operation::new("Do", vec![Object::Name(img_name.as_bytes().to_vec())]);
+                    let content = Content {
+                        operations: vec![cm_operation, do_operation],
+                    };
+
+                    let content_id =
+                        doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+
+                    let page_id = doc.add_object(dictionary! {
+                        "Type" => "Page",
+                        "Parent" => parent,
+                        "Contents" => content_id,
+                        "MediaBox" => vec![0.into(), 0.into(), (width as u32).into(), (height as u32).into()]
+                    });
+
+                    doc.add_xobject(page_id, img_name.as_bytes(), img_id)
+                        .unwrap();
+
+                    page_ids.push(page_id);
+                    parent = page_id;
                 }
                 pdf_image::optimize::ImageData::MOZJPEG(
                     compressed_data,
                     width,
                     height,
                     color_type,
-                ) => {}
+                ) => {
+                    let (color_type, bits) = color_type.to_pdf_format();
+                    let dic = dictionary!(
+                        "Type" => Object::Name(b"XObject".to_vec()),
+                        "Subtype" => Object::Name(b"Image".to_vec()),
+                        "Width" => width as u32,
+                        "Height" => height as u32,
+                        "ColorSpace" => Object::Name(color_type),
+                        "BitsPerComponent" => bits as u32,
+                        "Filter" => Object::Name(b"DCTDecode".to_vec())
+                    );
+                    let img_object = Stream::new(dic, compressed_data);
+                    let img_id = doc.add_object(img_object);
+                    let img_name = format!("X{}", img_id.0);
+
+                    let cm_operation = Operation::new(
+                        "cm",
+                        vec![
+                            (width as u32).into(),
+                            0.into(),
+                            0.into(),
+                            (height as u32).into(),
+                            0.into(),
+                            0.into(),
+                        ],
+                    );
+
+                    let do_operation =
+                        Operation::new("Do", vec![Object::Name(img_name.as_bytes().to_vec())]);
+                    let content = Content {
+                        operations: vec![cm_operation, do_operation],
+                    };
+
+                    let content_id =
+                        doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+
+                    let page_id = doc.add_object(dictionary! {
+                        "Type" => "Page",
+                        "Parent" => parent,
+                        "Contents" => content_id,
+                        "MediaBox" => vec![0.into(), 0.into(), (width as u32).into(), (height as u32).into()]
+                    });
+
+                    doc.add_xobject(page_id, img_name.as_bytes(), img_id)
+                        .unwrap();
+
+                    page_ids.push(page_id);
+                    parent = page_id;
+                }
                 pdf_image::optimize::ImageData::JPEG(
                     compressed_data,
                     width,
                     height,
                     color_type,
-                ) => {}
+                ) => {
+                    let (color_type, bits) = color_type.to_pdf_format();
+                    let dic = dictionary!(
+                        "Type" => Object::Name(b"XObject".to_vec()),
+                        "Subtype" => Object::Name(b"Image".to_vec()),
+                        "Width" => width as u32,
+                        "Height" => height as u32,
+                        "ColorSpace" => Object::Name(color_type),
+                        "BitsPerComponent" => bits as u32,
+                        "Filter" => Object::Name(b"DCTDecode".to_vec())
+                    );
+                    let img_object = Stream::new(dic, compressed_data);
+                    let img_id = doc.add_object(img_object);
+                    let img_name = format!("X{}", img_id.0);
+
+                    let cm_operation = Operation::new(
+                        "cm",
+                        vec![
+                            (width as u32).into(),
+                            0.into(),
+                            0.into(),
+                            (height as u32).into(),
+                            0.into(),
+                            0.into(),
+                        ],
+                    );
+
+                    let do_operation =
+                        Operation::new("Do", vec![Object::Name(img_name.as_bytes().to_vec())]);
+                    let content = Content {
+                        operations: vec![cm_operation, do_operation],
+                    };
+
+                    let content_id =
+                        doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+
+                    let page_id = doc.add_object(dictionary! {
+                        "Type" => "Page",
+                        "Parent" => parent,
+                        "Contents" => content_id,
+                        "MediaBox" => vec![0.into(), 0.into(), (width as u32).into(), (height as u32).into()]
+                    });
+
+                    doc.add_xobject(page_id, img_name.as_bytes(), img_id)
+                        .unwrap();
+
+                    page_ids.push(page_id);
+                    parent = page_id;
+                }
             }
         }
+
+        let pages_dict = dictionary! {
+            "Type" => "Pages",
+            "Count" => page_ids.len() as u32,
+            "Kids" => page_ids.into_iter().map(Object::Reference).collect::<Vec<_>>(),
+        };
+
+        doc.objects.insert(pages_id, Object::Dictionary(pages_dict));
+
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+
+        doc.trailer.set("Root", catalog_id);
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&self.out_file)?;
+        let mut writer = BufWriter::new(file);
+
+        doc.save_to(&mut writer)?;
 
         Ok(())
     }
