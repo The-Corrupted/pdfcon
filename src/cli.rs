@@ -2,7 +2,7 @@ use crate::constants::physical_cores;
 use crate::pack::Pack;
 use crate::unpack::Unpack;
 use clap::{ArgAction, Command, arg, command, value_parser};
-use std::path::PathBuf;
+use std::{ffi::OsStr, path::PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PDFCon {
@@ -95,7 +95,7 @@ pub fn get_command() -> PDFCon {
                 .clamp(1usize, total_physical * 2),
             out_directory: sub_matches
                 .get_one::<PathBuf>("OUT_DIRECTORY")
-                .unwrap_or(&PathBuf::from("./out"))
+                .unwrap_or(&PathBuf::from("."))
                 .to_owned(),
             in_file: sub_matches
                 .get_one::<PathBuf>("IN_FILE")

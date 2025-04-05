@@ -173,7 +173,7 @@ pub mod optimize {
 
     pub fn optimize_jpeg(file: std::fs::File) -> Result<ImageData, PDFConError> {
         let result = std::panic::catch_unwind(|| -> Result<ImageData, PDFConError> {
-            let reader = BufReader::new(file);
+            let reader = BufReader::new(&file);
             let mut decompress = match mozjpeg::decompress::Decompress::builder()
                 .with_markers(mozjpeg::ALL_MARKERS)
                 .from_reader(reader)
@@ -185,7 +185,6 @@ pub mod optimize {
                 }
             };
 
-            decompress.dct_method(mozjpeg::DctMethod::IntegerSlow);
             let height = decompress.height();
             let width = decompress.width();
 
@@ -193,7 +192,8 @@ pub mod optimize {
                 .pixel_density()
                 .unwrap_or(mozjpeg::PixelDensity::default());
 
-            let input_color_space = decompress.color_space();
+            decompress.dct_method(mozjpeg::DctMethod::IntegerSlow);
+            decompress.do_block_smoothing(true);
 
             let (pixels, output_color_space) = match decompress.color_space() {
                 mozjpeg::ColorSpace::JCS_GRAYSCALE => {

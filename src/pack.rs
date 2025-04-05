@@ -1,7 +1,7 @@
 use crate::pdf_image;
 use crate::{Run, error::PDFConError};
-use indicatif::{ProgressBar, ProgressStyle};
-use log::error;
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use log::{error, info};
 use lopdf::content::Content;
 use lopdf::{Document, Object, Stream, content::Operation, dictionary};
 use rayon::prelude::*;
@@ -124,27 +124,17 @@ impl Pack {
 
         files.par_sort_by_key(|k| k.location.to_owned());
 
-        let total = files.len();
-        let pb = ProgressBar::new(total as u64)
+        let pre_processed = files
+            .par_iter()
+            .progress()
             .with_prefix("Processing Images")
             .with_style(
                 ProgressStyle::with_template(
                     "{prefix}: {wide_bar:.cyan/blue} {pos}/{len} ({elapsed})",
                 )
                 .unwrap(),
-            );
-
-        let pb: Arc<Mutex<ProgressBar>> = Arc::new(Mutex::new(pb));
-        let pre_processed = files
-            .par_iter()
+            )
             .filter_map(|image_file| {
-                match pb.lock() {
-                    Ok(p) => p.inc(1),
-                    Err(e) => {
-                        error!("Mutex poisoned: {}", e.to_string());
-                        pb.clear_poison();
-                    }
-                }
                 if self.optimize {
                     match self.optimize(image_file) {
                         Ok(bytes) => Some(bytes),
@@ -168,13 +158,6 @@ impl Pack {
             })
             .collect::<Vec<pdf_image::optimize::ImageData>>();
 
-        match pb.lock() {
-            Ok(p) => {
-                p.finish();
-            }
-            Err(e) => error!("Failed to unlock progressbar: {}", e),
-        }
-
         // Use the latest PDF version
         let mut doc = Document::with_version("1.7");
 
@@ -194,7 +177,7 @@ impl Pack {
         // Streams are a dictionary followed by a sequence of bytes. What the bytes represent depends on the
         // context. The stream dictionary is set internally by lopdf and normally doesn't need to be manually
         // manipulated. It contains keys such as Length, Filter, DecodeParams, etc.
-        //let mut page_ids: Vec<_> = Vec::new();
+
         let mut page_ids = Vec::new();
         let mut parent = pages_id;
         for image_data in pre_processed {
