@@ -1,7 +1,7 @@
 use crate::pdf_image;
 use crate::{Run, error::PDFConError};
 use indicatif::{ProgressBar, ProgressStyle};
-use log::{error, info};
+use log::error;
 use lopdf::content::Content;
 use lopdf::{Document, Object, Stream, content::Operation, dictionary};
 use rayon::prelude::*;
@@ -133,6 +133,7 @@ impl Pack {
                 )
                 .unwrap(),
             );
+
         let pb: Arc<Mutex<ProgressBar>> = Arc::new(Mutex::new(pb));
         let pre_processed = files
             .par_iter()
@@ -190,7 +191,7 @@ impl Pack {
         // Note, the operators and operands are specified in a reverse order than they actually
         // appear in the PDF file itself
 
-        // Streams are a dictionary folled by a sequence of bytes. What the bytes represent depends on the
+        // Streams are a dictionary followed by a sequence of bytes. What the bytes represent depends on the
         // context. The stream dictionary is set internally by lopdf and normally doesn't need to be manually
         // manipulated. It contains keys such as Length, Filter, DecodeParams, etc.
         //let mut page_ids: Vec<_> = Vec::new();
@@ -208,60 +209,6 @@ impl Pack {
                         "ColorSpace" => Object::Name(color_type),
                         "BitsPerComponent" => bits as u32,
                         "Filter" => Object::Name(b"FlateDecode".to_vec())
-                    );
-                    let img_object = Stream::new(dic, compressed_data);
-                    let img_id = doc.add_object(img_object);
-                    let img_name = format!("X{}", img_id.0);
-
-                    let cm_operation = Operation::new(
-                        "cm",
-                        vec![
-                            (width as u32).into(),
-                            0.into(),
-                            0.into(),
-                            (height as u32).into(),
-                            0.into(),
-                            0.into(),
-                        ],
-                    );
-
-                    let do_operation =
-                        Operation::new("Do", vec![Object::Name(img_name.as_bytes().to_vec())]);
-                    let content = Content {
-                        operations: vec![cm_operation, do_operation],
-                    };
-
-                    let content_id =
-                        doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
-
-                    let page_id = doc.add_object(dictionary! {
-                        "Type" => "Page",
-                        "Parent" => parent,
-                        "Contents" => content_id,
-                        "MediaBox" => vec![0.into(), 0.into(), (width as u32).into(), (height as u32).into()]
-                    });
-
-                    doc.add_xobject(page_id, img_name.as_bytes(), img_id)
-                        .unwrap();
-
-                    page_ids.push(page_id);
-                    parent = page_id;
-                }
-                pdf_image::optimize::ImageData::MOZJPEG(
-                    compressed_data,
-                    width,
-                    height,
-                    color_type,
-                ) => {
-                    let (color_type, bits) = color_type.to_pdf_format();
-                    let dic = dictionary!(
-                        "Type" => Object::Name(b"XObject".to_vec()),
-                        "Subtype" => Object::Name(b"Image".to_vec()),
-                        "Width" => width as u32,
-                        "Height" => height as u32,
-                        "ColorSpace" => Object::Name(color_type),
-                        "BitsPerComponent" => bits as u32,
-                        "Filter" => Object::Name(b"DCTDecode".to_vec())
                     );
                     let img_object = Stream::new(dic, compressed_data);
                     let img_id = doc.add_object(img_object);

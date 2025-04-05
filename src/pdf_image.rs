@@ -23,7 +23,7 @@ impl PDFConColorSpace {
     }
 }
 
-// We'll need to figure out its bit depth at some point. For now assume it's always 8 bits
+// Unless
 impl From<mozjpeg::ColorSpace> for PDFConColorSpace {
     fn from(c: mozjpeg::ColorSpace) -> Self {
         match c {
@@ -38,12 +38,9 @@ impl From<mozjpeg::ColorSpace> for PDFConColorSpace {
 impl From<image::ColorType> for PDFConColorSpace {
     fn from(c: image::ColorType) -> Self {
         match c {
-            image::ColorType::L16 => Self::L16,
-            image::ColorType::L8 => Self::L8,
+            image::ColorType::L8 | image::ColorType::La8 => Self::L8,
             image::ColorType::Rgb8 | image::ColorType::Rgba8 => Self::RGB8,
-            image::ColorType::Rgb16 | image::ColorType::Rgba16 => Self::RGB16,
-            image::ColorType::Rgb32F | image::ColorType::Rgba32F => Self::RGB16,
-            _ => unreachable!(),
+            _ => Self::RGB8,
         }
     }
 }
@@ -75,7 +72,6 @@ pub mod optimize {
 
     pub enum ImageData {
         PNG(Vec<u8>, u32, u32, PDFConColorSpace),
-        MOZJPEG(Vec<u8>, usize, usize, PDFConColorSpace),
         JPEG(Vec<u8>, u32, u32, PDFConColorSpace),
     }
 
@@ -240,10 +236,10 @@ pub mod optimize {
                 .into_inner()
                 .map_err(|_| PDFConError::BufferInnerError)?;
 
-            Ok(ImageData::MOZJPEG(
+            Ok(ImageData::JPEG(
                 content,
-                width,
-                height,
+                width as u32,
+                height as u32,
                 PDFConColorSpace::from(output_color_space),
             ))
         });

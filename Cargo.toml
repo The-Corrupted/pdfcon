@@ -4,14 +4,35 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-indicatif = { version = "0.17.11", features = ["rayon"] }
-lopdf = "0.36.0"
-flate2 = "1.1.1"
-image = { version = "0.25.6", features = ["png", "jpeg"] }
-oxipng = { version = "9.1.4" }
-mozjpeg = { version = "0.10.13" }
-rayon = { version = "1.10.0" }
-clap = { version = "4.5.34", features = ["cargo"] }
-num_cpus = { version = "1.16.0" }
+env_logger = { version = "0.11.8", features = [
+    "auto-color",
+    "humantime",
+], default-features = false }
 log = "0.4.27"
-env_logger = "0.11.8"
+indicatif = { version = "0.17.11", features = ["rayon"] }
+lopdf = { version = "0.36.0", features = ["rayon"], default-features = false }
+flate2 = { version = "1.1.1", features = ["zlib-rs"] }
+image = { version = "0.25.6", features = [
+    "png",
+    "jpeg",
+], default-features = false }
+oxipng = { version = "9.1.4" }
+mozjpeg = { version = "0.10.13", features = [
+    "parallel",
+    "nasm_simd",
+    "with_simd",
+] }
+rayon = { version = "1.10.0" }
+clap = { version = "4.5.34", features = [
+    "cargo",
+    "color",
+    "help",
+    "usage",
+], default-features = false }
+num_cpus = { version = "1.16.0" }
+
+[profile.release]
+panic = "unwind"
+opt-level = 3
+strip = true
+lto = true
