@@ -65,6 +65,12 @@ pub fn get_command() -> PDFCon {
                     arg!([IN_FILE])
                         .value_parser(value_parser!(PathBuf))
                         .required(true),
+                )
+                .arg(
+                    arg!([OPTIMIZE])
+                        .short('o')
+                        .long("optimize")
+                        .action(ArgAction::SetTrue),
                 ),
         )
         .get_matches();
@@ -95,12 +101,16 @@ pub fn get_command() -> PDFCon {
                 .clamp(1usize, total_physical * 2),
             out_directory: sub_matches
                 .get_one::<PathBuf>("OUT_DIRECTORY")
-                .unwrap_or(&PathBuf::from("."))
+                .unwrap_or(&PathBuf::from("output/"))
                 .to_owned(),
             in_file: sub_matches
                 .get_one::<PathBuf>("IN_FILE")
                 .unwrap()
                 .to_owned(),
+            optimize: sub_matches
+                .get_one::<bool>("OPTIMIZE")
+                .copied()
+                .unwrap_or(false),
         }),
         _ => unreachable!(
             "Subcommands are mandatory. It should not be possible to reach this branch"

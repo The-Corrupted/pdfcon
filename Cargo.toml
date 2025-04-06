@@ -9,7 +9,8 @@ env_logger = { version = "0.11.8", features = [
     "humantime",
 ], default-features = false }
 log = "0.4.27"
-indicatif = { version = "0.17.11", features = ["rayon"] }
+indicatif = { version = "0.17.11", features = ["rayon", "improved_unicode"] }
+console = { version = "0.15.11", default-features = false }
 lopdf = { version = "0.36.0", features = ["rayon"], default-features = false }
 flate2 = { version = "1.1.1", features = ["zlib-rs"] }
 image = { version = "0.25.6", features = [

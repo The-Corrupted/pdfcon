@@ -8,6 +8,6 @@ fn main() -> Result<(), PDFConError> {
     let command = cli::get_command();
     match command {
         cli::PDFCon::PACK(p) => p.run(),
-        cli::PDFCon::UNPACK(_) => Ok(()),
+        cli::PDFCon::UNPACK(up) => up.run(),
     }
 }

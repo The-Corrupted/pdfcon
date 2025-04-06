@@ -1,13 +1,13 @@
 use crate::pdf_image;
 use crate::{Run, error::PDFConError};
-use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
-use log::{error, info};
+use console::Style;
+use indicatif::{ParallelProgressIterator, ProgressStyle};
+use log::error;
 use lopdf::content::Content;
 use lopdf::{Document, Object, Stream, content::Operation, dictionary};
 use rayon::prelude::*;
 use std::io::BufWriter;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pack {
@@ -112,6 +112,8 @@ impl Pack {
             .num_threads(self.threads)
             .build_global()?;
 
+        let term = console::Term::stdout();
+
         let directory = std::fs::read_dir(&self.in_directory)?;
 
         let mut files: Vec<ImageFile> = directory
@@ -127,13 +129,14 @@ impl Pack {
         let pre_processed = files
             .par_iter()
             .progress()
-            .with_prefix("Processing Images")
+            .with_prefix("⚡Processing Images")
             .with_style(
                 ProgressStyle::with_template(
-                    "{prefix}: {wide_bar:.cyan/blue} {pos}/{len} ({elapsed})",
+                    format!("{{prefix}}: {{wide_bar}} {{pos}}/{{len}} ({{elapsed}})",).as_str(),
                 )
                 .unwrap(),
             )
+            .with_finish(indicatif::ProgressFinish::AndClear)
             .filter_map(|image_file| {
                 if self.optimize {
                     match self.optimize(image_file) {
@@ -157,6 +160,18 @@ impl Pack {
                 }
             })
             .collect::<Vec<pdf_image::optimize::ImageData>>();
+
+        term.write_line(
+            format!(
+                "{}",
+                Style::new()
+                    .color256(82)
+                    .bold()
+                    .apply_to("Processing Finished ✓")
+                    .to_string(),
+            )
+            .as_str(),
+        )?;
 
         // Use the latest PDF version
         let mut doc = Document::with_version("1.7");
