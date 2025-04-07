@@ -209,6 +209,7 @@ impl Run for Unpack {
         rayon::ThreadPoolBuilder::new()
             .num_threads(self.threads)
             .build_global()?;
+
         std::fs::create_dir_all(&self.out_directory)?;
         // This takes forever to complete and there is a possibility that it fails. Display a progressbar spinner while it runs
         let pb_spinner = ProgressBar::new_spinner()

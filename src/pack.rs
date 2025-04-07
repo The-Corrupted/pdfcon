@@ -1,8 +1,9 @@
 use crate::pdf_image;
 use crate::{Run, error::PDFConError};
 use console::Style;
-use indicatif::{ParallelProgressIterator, ProgressStyle};
-use log::error;
+use console::Term;
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use log::{debug, error};
 use lopdf::content::Content;
 use lopdf::{Document, Object, Stream, content::Operation, dictionary};
 use rayon::prelude::*;
@@ -101,7 +102,7 @@ impl Pack {
             "jpeg" | "jpg" => ImageType::JPG,
             _ => {
                 // File was not a supported image. This should be logged
-                error!("File type not supported");
+                debug!("File type not supported");
                 return None;
             }
         };
@@ -110,8 +111,6 @@ impl Pack {
     }
 
     fn para_process(&self) -> Result<(), PDFConError> {
-        let term = console::Term::stdout();
-
         let directory = std::fs::read_dir(&self.in_directory)?;
 
         let mut files: Vec<ImageFile> = directory
@@ -124,18 +123,47 @@ impl Pack {
 
         files.par_sort_by_key(|k| k.location.to_owned());
 
+        let bold = Style::new().bold();
+        let c_gray = Style::new().color256(8);
+        let bc_yellow = Style::new().yellow().bold();
+        let bc_green = Style::new().green().bold();
+        let bar_mid = Style::new().color256(107).bold();
+        let bc_drk_green = Style::new().color256(65).bold();
+
+        // Initialize the progress bar
+        let pb = ProgressBar::new(files.len() as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .progress_chars("█▓█")
+                .tick_strings(&["∙∙∙", "●∙∙", "∙●∙", "∙∙●", "∙∙●"])
+                .template(format!(
+                    " {{spinner:.yellow.bold}} {{prefix:.yellow.bold}}{} {}{{wide_bar:.2.bold/:.65.bold}}{{msg}} {{percent:.green.bold}}{} {}{{pos:.8}}{}{{len:.8}}{} ",
+                    bold.apply_to(":").to_string(),
+                    bc_green.apply_to("").to_string(),
+                    bc_green.apply_to("%").to_string(),
+                    c_gray.apply_to("(").to_string(),
+                    c_gray.apply_to("/").to_string(),
+                    c_gray.apply_to(")").to_string()
+                ).as_str())
+                .unwrap()
+        );
+        pb.set_prefix("Converting to PDF");
+        pb.set_message(bc_drk_green.apply_to("").to_string());
+        pb.enable_steady_tick(std::time::Duration::from_millis(200));
+
         let pre_processed = files
             .par_iter()
-            .progress()
-            .with_prefix("⚡Processing Images")
-            .with_style(
-                ProgressStyle::with_template(
-                    format!("{{prefix}}: {{wide_bar}} {{pos}}/{{len}} ({{elapsed}})",).as_str(),
-                )
-                .unwrap_or(ProgressStyle::default_bar()),
-            )
-            .with_finish(indicatif::ProgressFinish::AndClear)
+            .progress_with(pb.clone())
             .filter_map(|image_file| {
+                let pos = pb.position();
+                let total = pb.length().unwrap();
+
+                if pos >= total - 2 && pos < total {
+                    pb.set_message(bar_mid.apply_to("").to_string());
+                } else if pos == total {
+                    pb.set_message(bc_green.apply_to("").to_string());
+                }
+
                 if self.optimize {
                     match self.optimize(image_file) {
                         Ok(bytes) => Some(bytes),
@@ -159,18 +187,9 @@ impl Pack {
                 }
             })
             .collect::<Vec<pdf_image::optimize::ImageData>>();
-
-        term.write_line(
-            format!(
-                "{}",
-                Style::new()
-                    .color256(82)
-                    .bold()
-                    .apply_to("Processing Finished ✓")
-                    .to_string(),
-            )
-            .as_str(),
-        )?;
+        pb.finish_and_clear();
+        Term::stdout()
+            .write_line(format!("{}", bc_yellow.apply_to(" ● Converting Complete! ")).as_str())?;
 
         // Use the latest PDF version
         let mut doc = Document::with_version("1.7");
@@ -333,6 +352,7 @@ impl Run for Pack {
         rayon::ThreadPoolBuilder::new()
             .num_threads(self.threads)
             .build_global()?;
+
         self.para_process()?;
         Ok(())
     }

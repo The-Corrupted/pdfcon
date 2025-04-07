@@ -41,7 +41,7 @@ pub fn get_command() -> PDFCon {
                 .arg(
                     arg!([IN_DIRECTORY])
                         .value_parser(value_parser!(PathBuf))
-                        .required(true),
+                        .required(false),
                 ),
         )
         .subcommand(
@@ -75,17 +75,21 @@ pub fn get_command() -> PDFCon {
         )
         .get_matches();
 
+    let c_dir = std::env::current_dir().unwrap_or(PathBuf::from("./"));
+    let dir_name = c_dir.file_name().unwrap_or(OsStr::new("./"));
+    let default_name = c_dir.join(dir_name).with_extension("pdf");
+
     let total_physical = physical_cores();
     match matches.subcommand() {
         Some(("pack", sub_matches)) => PDFCon::PACK(Pack {
             optimize: sub_matches.get_flag("OPTIMIZE"),
             in_directory: sub_matches
                 .get_one::<PathBuf>("IN_DIRECTORY")
-                .unwrap()
+                .unwrap_or(&PathBuf::from("."))
                 .to_owned(),
             out_file: sub_matches
                 .get_one::<PathBuf>("OUT_FILE")
-                .unwrap_or(&PathBuf::from("output.pdf"))
+                .unwrap_or(&default_name)
                 .to_owned(),
             threads: sub_matches
                 .get_one::<usize>("THREADS")
