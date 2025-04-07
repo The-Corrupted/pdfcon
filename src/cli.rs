@@ -1,12 +1,7 @@
 use clap::{ArgAction, Command, arg, command, value_parser};
 use std::path::PathBuf;
-use std::ffi::OsStr;
 
 pub fn build_command() -> clap::Command {
-    let c_dir = std::env::current_dir().unwrap_or(PathBuf::from("./"));
-    let dir_name = c_dir.file_name().unwrap_or(OsStr::new("./"));
-    let default_name = c_dir.join(dir_name).with_extension("pdf");
-  
     let command: clap::Command = command!()
         .propagate_version(true)
         .subcommand_required(true)
@@ -69,4 +64,5 @@ pub fn build_command() -> clap::Command {
                         .action(ArgAction::SetTrue),
                 ),
         );
+    command
 }
