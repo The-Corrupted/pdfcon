@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod command;
 pub mod constants;
 pub mod error;
 pub mod pack;

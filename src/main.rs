@@ -1,13 +1,13 @@
 use env_logger;
 use pdfcon::Run;
-use pdfcon::cli;
+use pdfcon::command;
 use pdfcon::error::PDFConError;
 
 fn main() -> Result<(), PDFConError> {
     env_logger::init();
-    let command = cli::get_command();
+    let command = command::get_command();
     match command {
-        cli::PDFCon::PACK(p) => p.run(),
-        cli::PDFCon::UNPACK(up) => up.run(),
+        command::PDFCon::PACK(p) => p.run(),
+        command::PDFCon::UNPACK(up) => up.run(),
     }
 }
