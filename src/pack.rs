@@ -46,7 +46,7 @@ impl Pack {
     ) -> Result<pdf_image::optimize::ImageData, PDFConError> {
         let file = std::fs::OpenOptions::new()
             .read(true)
-            .open(image_file.location.to_owned())?;
+            .open(&image_file.location)?;
         match image_file.image_type {
             ImageType::PNG => pdf_image::optimize::process_png_optimized(file),
             ImageType::JPG => pdf_image::optimize::optimize_jpeg(file),
@@ -59,7 +59,7 @@ impl Pack {
     ) -> Result<pdf_image::optimize::ImageData, PDFConError> {
         let file = std::fs::OpenOptions::new()
             .read(true)
-            .open(image_file.location.to_owned())?;
+            .open(&image_file.location)?;
         match image_file.image_type {
             ImageType::PNG => pdf_image::optimize::process_png_optimized(file),
             ImageType::JPG => pdf_image::optimize::jpeg(file),
