@@ -32,7 +32,7 @@ pub fn build_command() -> clap::Command {
                 .arg(
                     arg!([IN_DIRECTORY])
                         .value_parser(value_parser!(PathBuf))
-                        .required(true),
+                        .required(false),
                 ),
         )
         .subcommand(
