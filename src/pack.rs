@@ -1,8 +1,7 @@
 use crate::pdf_image;
+use crate::progress::{bar, close_bar, update_bar};
 use crate::{Run, error::PDFConError};
-use console::Style;
-use console::Term;
-use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use indicatif::ParallelProgressIterator;
 use log::{debug, error};
 use lopdf::content::Content;
 use lopdf::{Document, Object, Stream, content::Operation, dictionary};
@@ -123,33 +122,8 @@ impl Pack {
 
         files.par_sort_by_key(|k| k.location.to_owned());
 
-        let bold = Style::new().bold();
-        let c_gray = Style::new().color256(8);
-        let bc_yellow = Style::new().yellow().bold();
-        let bc_green = Style::new().green().bold();
-        let bar_mid = Style::new().color256(107).bold();
-        let bc_drk_green = Style::new().color256(65).bold();
-
         // Initialize the progress bar
-        let pb = ProgressBar::new(files.len() as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .progress_chars("█▓█")
-                .tick_strings(&["∙∙∙", "●∙∙", "∙●∙", "∙∙●", "∙∙●"])
-                .template(format!(
-                    " {{spinner:.yellow.bold}} {{prefix:.yellow.bold}}{} {}{{wide_bar:.2.bold/:.65.bold}}{{msg}} {{percent:.green.bold}}{} {}{{pos:.8}}{}{{len:.8}}{} ",
-                    bold.apply_to(":").to_string(),
-                    bc_green.apply_to("").to_string(),
-                    bc_green.apply_to("%").to_string(),
-                    c_gray.apply_to("(").to_string(),
-                    c_gray.apply_to("/").to_string(),
-                    c_gray.apply_to(")").to_string()
-                ).as_str())
-                .unwrap()
-        );
-        pb.set_prefix("Converting to PDF");
-        pb.set_message(bc_drk_green.apply_to("").to_string());
-        pb.enable_steady_tick(std::time::Duration::from_millis(200));
+        let pb = bar("Converting to PDF", files.len() as u64);
 
         let pre_processed = files
             .par_iter()
@@ -158,11 +132,8 @@ impl Pack {
                 let pos = pb.position();
                 let total = pb.length().unwrap();
 
-                if pos >= total - 2 && pos < total {
-                    pb.set_message(bar_mid.apply_to("").to_string());
-                } else if pos == total {
-                    pb.set_message(bc_green.apply_to("").to_string());
-                }
+                // Update bar based on current progress
+                update_bar(&pb, pos, total);
 
                 if self.optimize {
                     match self.optimize(image_file) {
@@ -187,9 +158,9 @@ impl Pack {
                 }
             })
             .collect::<Vec<pdf_image::optimize::ImageData>>();
-        pb.finish_and_clear();
-        Term::stdout()
-            .write_line(format!("{}", bc_yellow.apply_to(" ● Converting Complete! ")).as_str())?;
+
+        // Finish bar and display message
+        close_bar(pb, " ● Converting Complete! ");
 
         // Use the latest PDF version
         let mut doc = Document::with_version("1.7");

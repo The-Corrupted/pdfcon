@@ -2,7 +2,8 @@ use crate::Run;
 use crate::constants::IGNORE_LIST;
 use crate::error::PDFConError;
 use crate::pdf_image::{self, PDFConColorSpace};
-use indicatif::{ParallelProgressIterator, ProgressBar};
+use crate::progress::{bar, close_bar, spinner, update_bar};
+use indicatif::ParallelProgressIterator;
 use log::{debug, error};
 use lopdf::{Dictionary, Document, Object};
 use rayon::prelude::*;
@@ -42,6 +43,7 @@ impl Unpack {
         &self,
         doc: &Document,
         page_num: u32,
+        total_pages: usize,
         reference: &Object,
     ) -> Result<(), PDFConError> {
         debug!("Getting xobject information");
@@ -101,10 +103,13 @@ impl Unpack {
                     }
                 }
 
+                // Calculate needed zero padding for page names
+                let padding_width = (total_pages.ilog10() + 1) as usize;
                 let path = self.out_directory.join(format!(
-                    "{:0>5}.{}",
+                    "{:0width$}.{}",
                     page_num,
-                    if is_jpeg { "jpg" } else { "png" }
+                    if is_jpeg { "jpg" } else { "png" },
+                    width = padding_width
                 ));
 
                 if is_jpeg {
@@ -161,30 +166,43 @@ impl Unpack {
         doc: &Document,
         page_num: u32,
         page_dict: &Dictionary,
+        total_pages: usize,
     ) -> Result<(), PDFConError> {
         debug!("Getting resources and xobjects");
         let resources_dict = page_dict.get(b"Resources")?.as_dict()?;
         let x_obj_dict = resources_dict.get(b"XObject")?.as_dict()?;
         for (_name, x_ref) in x_obj_dict.iter() {
-            self.process_xobject(&doc, page_num, &x_ref)?;
+            self.process_xobject(&doc, page_num, total_pages, &x_ref)?;
         }
         Ok(())
     }
 
     fn extract_images(&self, doc: &Document) -> Result<(), PDFConError> {
-        let results: Vec<Result<(), PDFConError>> = doc
-            .get_pages()
-            .into_par_iter()
-            .collect::<Vec<_>>()
+        let pages = doc.get_pages().into_par_iter().collect::<Vec<_>>();
+        let total_pages = pages.len();
+
+        // Initialize the progress bar
+        let pb = bar("Processing Images", total_pages as u64);
+
+        let results: Vec<Result<(), PDFConError>> = pages
             .par_iter()
-            .progress()
+            .progress_with(pb.clone())
             .map(|(page_num, page_id)| {
+                let pos = pb.position();
+                let total = pb.length().unwrap();
+
+                // Update bar based on current progress
+                update_bar(&pb, pos, total);
+
                 debug!("Getting page dict");
                 let page_dict = doc.get_object(*page_id)?.as_dict()?;
-                self.find_xobject_images_in_page(&doc, *page_num, &page_dict)?;
+                self.find_xobject_images_in_page(&doc, *page_num, &page_dict, total_pages)?;
                 Ok(())
             })
             .collect();
+
+        // Finish bar and display message
+        close_bar(pb, " ● Processing Complete! ");
 
         // Log any errors and return a general error
         let mut error_encountered = false;
@@ -211,17 +229,15 @@ impl Run for Unpack {
             .build_global()?;
 
         std::fs::create_dir_all(&self.out_directory)?;
-        // This takes forever to complete and there is a possibility that it fails. Display a progressbar spinner while it runs
-        let pb_spinner = ProgressBar::new_spinner()
-            .with_style(
-                indicatif::ProgressStyle::with_template("{prefix}: {spinner}")
-                    .unwrap_or(indicatif::ProgressStyle::default_spinner())
-                    .tick_chars("▉▊▋▌▍▎▏▎▍▌▋▊▉"),
-            )
-            .with_prefix("Parsing PDF");
-        pb_spinner.enable_steady_tick(std::time::Duration::from_millis(500));
+
+        // Add spinner to show program is doing something
+        let spnr = spinner("Parsing PDF");
+
         let document = Document::load_filtered(&self.in_file, filter_func)?;
-        pb_spinner.finish();
+
+        // Finish bar and display message
+        close_bar(spnr, " ● Parsing Complete! ");
+
         self.extract_images(&document)?;
 
         Ok(())
