@@ -40,29 +40,22 @@ impl ImageFile {
 }
 
 impl Pack {
-    fn optimize(
+    fn process_image(
         &self,
         image_file: &ImageFile,
     ) -> Result<pdf_image::optimize::ImageData, PDFConError> {
         let file = std::fs::OpenOptions::new()
             .read(true)
-            .open(image_file.location.to_owned())?;
+            .open(&image_file.location)?;
         match image_file.image_type {
             ImageType::PNG => pdf_image::optimize::process_png_optimized(file),
-            ImageType::JPG => pdf_image::optimize::optimize_jpeg(file),
-        }
-    }
-
-    fn read_file(
-        &self,
-        image_file: &ImageFile,
-    ) -> Result<pdf_image::optimize::ImageData, PDFConError> {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .open(image_file.location.to_owned())?;
-        match image_file.image_type {
-            ImageType::PNG => pdf_image::optimize::process_png_optimized(file),
-            ImageType::JPG => pdf_image::optimize::jpeg(file),
+            ImageType::JPG => {
+                if self.optimize {
+                    pdf_image::optimize::optimize_jpeg(file)
+                } else {
+                    pdf_image::optimize::jpeg(file)
+                }
+            }
         }
     }
 
@@ -136,25 +129,11 @@ impl Pack {
                 // Update bars end cap based on current progress
                 update_end_cap(&pb, pos, total);
 
-                if self.optimize {
-                    match self.optimize(image_file) {
-                        Ok(bytes) => Some(bytes),
-                        Err(e) => {
-                            // LOG and ignore
-                            error!("Failed to optimize image file: {}", e.to_string());
-                            return None;
-                        }
-                    }
-                } else {
-                    // Just run optimize for now until we've created the unoptimized version
-                    match self.read_file(image_file) {
-                        Ok(bytes) => Some(bytes),
-                        //TODO Handle better
-                        Err(_e) => {
-                            // LOG and ignore
-                            error!("Failed to read the file");
-                            return None;
-                        }
+                match self.process_image(image_file) {
+                    Ok(bytes) => Some(bytes),
+                    Err(e) => {
+                        error!("Failed to process image_file {}", e.to_string());
+                        return None;
                     }
                 }
             })
