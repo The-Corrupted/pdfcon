@@ -133,6 +133,7 @@ impl Unpack {
                         content = pdf_image::decompress(&content)?;
                     }
                 }
+
                 let path = self.out_directory.join(format!(
                     "{:0>5}.{}",
                     page_num,
@@ -162,7 +163,26 @@ impl Unpack {
             }
             None => {
                 // This is a raw pixel buffer. We can encode this in any format we'd like
-                debug!("Raw pixel buffer. Curerntly unimplemented");
+                // Treat it like its a png
+                debug!("Raw pixel buffer");
+                let width = stream.dict.get(b"Width")?.as_i64()? as u32;
+                let height = stream.dict.get(b"Height")?.as_i64()? as u32;
+                let bits = stream.dict.get(b"BitsPerComponent")?.as_i64()? as u8;
+                let color_enum = PDFConColorSpace::from_pdf_format((
+                    stream.dict.get(b"ColorSpace")?.as_name()?,
+                    bits,
+                ));
+
+                let path = self.out_directory.join(format!("{:0>5}.png", page_num,));
+
+                pdf_image::encode_and_save_png(
+                    &stream.content,
+                    width,
+                    height,
+                    &color_enum,
+                    &path,
+                    self.optimize,
+                )?
             }
         }
 
