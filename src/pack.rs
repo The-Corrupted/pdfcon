@@ -1,8 +1,8 @@
 use crate::pdf_image;
+use crate::progress::{bar, close_bar, update_bar};
 use crate::{Run, error::PDFConError};
-use console::Style;
-use indicatif::{ParallelProgressIterator, ProgressStyle};
-use log::error;
+use indicatif::ParallelProgressIterator;
+use log::{debug, error};
 use lopdf::content::Content;
 use lopdf::{Document, Object, Stream, content::Operation, dictionary};
 use rayon::prelude::*;
@@ -101,7 +101,7 @@ impl Pack {
             "jpeg" | "jpg" => ImageType::JPG,
             _ => {
                 // File was not a supported image. This should be logged
-                error!("File type not supported");
+                debug!("File type not supported");
                 return None;
             }
         };
@@ -110,8 +110,6 @@ impl Pack {
     }
 
     fn para_process(&self) -> Result<(), PDFConError> {
-        let term = console::Term::stdout();
-
         let directory = std::fs::read_dir(&self.in_directory)?;
 
         let mut files: Vec<ImageFile> = directory
@@ -124,18 +122,19 @@ impl Pack {
 
         files.par_sort_by_key(|k| k.location.to_owned());
 
+        // Initialize the progress bar
+        let pb = bar("Converting to PDF", files.len() as u64);
+
         let pre_processed = files
             .par_iter()
-            .progress()
-            .with_prefix("⚡Processing Images")
-            .with_style(
-                ProgressStyle::with_template(
-                    format!("{{prefix}}: {{wide_bar}} {{pos}}/{{len}} ({{elapsed}})",).as_str(),
-                )
-                .unwrap_or(ProgressStyle::default_bar()),
-            )
-            .with_finish(indicatif::ProgressFinish::AndClear)
+            .progress_with(pb.clone())
             .filter_map(|image_file| {
+                let pos = pb.position();
+                let total = pb.length().unwrap();
+
+                // Update bar based on current progress
+                update_bar(&pb, pos, total);
+
                 if self.optimize {
                     match self.optimize(image_file) {
                         Ok(bytes) => Some(bytes),
@@ -160,17 +159,8 @@ impl Pack {
             })
             .collect::<Vec<pdf_image::optimize::ImageData>>();
 
-        term.write_line(
-            format!(
-                "{}",
-                Style::new()
-                    .color256(82)
-                    .bold()
-                    .apply_to("Processing Finished ✓")
-                    .to_string(),
-            )
-            .as_str(),
-        )?;
+        // Finish bar and display message
+        close_bar(pb, " ● Converting Complete! ");
 
         // Use the latest PDF version
         let mut doc = Document::with_version("1.7");
@@ -333,6 +323,7 @@ impl Run for Pack {
         rayon::ThreadPoolBuilder::new()
             .num_threads(self.threads)
             .build_global()?;
+
         self.para_process()?;
         Ok(())
     }
