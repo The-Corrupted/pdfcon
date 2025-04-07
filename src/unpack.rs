@@ -1,13 +1,11 @@
 use crate::Run;
 use crate::constants::IGNORE_LIST;
 use crate::error::PDFConError;
-use crate::pdf_image::optimize::optimize_jpeg_mem;
 use crate::pdf_image::{self, PDFConColorSpace};
 use indicatif::{ParallelProgressIterator, ProgressBar};
 use log::{debug, error};
 use lopdf::{Dictionary, Document, Object};
 use rayon::prelude::*;
-use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,37 +38,6 @@ pub fn filter_func(object_id: (u32, u16), object: &mut Object) -> Option<((u32, 
 }
 
 impl Unpack {
-    pub fn process_jpg(&self, page_num: u32, content: &Vec<u8>) -> Result<(), PDFConError> {
-        // Save image
-        debug!("Processing JPEG");
-        if self.optimize {
-            let file_name = format!("{:0>5}.jpg", page_num);
-            debug!("Saving: {}", file_name);
-            let path = self.out_directory.join(file_name);
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .open(path)?;
-            let mut writer = BufWriter::new(file);
-            writer.write_all(&optimize_jpeg_mem(content)?)?;
-            writer.flush()?;
-            optimize_jpeg_mem(content)?;
-        } else {
-            let file_name = format!("{:0>5}.jpg", page_num);
-            debug!("Saving: {}", file_name);
-            let path = self.out_directory.join(file_name);
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .open(path)?;
-            let mut writer = BufWriter::new(file);
-            writer.write_all(&content)?;
-            writer.flush()?;
-        }
-
-        Ok(())
-    }
-
     fn process_xobject(
         &self,
         doc: &Document,
@@ -173,7 +140,7 @@ impl Unpack {
                     bits,
                 ));
 
-                let path = self.out_directory.join(format!("{:0>5}.png", page_num,));
+                let path = self.out_directory.join(format!("{:0>5}.png", page_num));
 
                 pdf_image::encode_and_save_png(
                     &stream.content,
