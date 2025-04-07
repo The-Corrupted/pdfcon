@@ -71,7 +71,8 @@ impl Pack {
     ) -> Option<ImageFile> {
         let unwrapped_entry = match entry {
             Ok(e) => e,
-            Err(e) => {
+            //TODO Handle better
+            Err(_e) => {
                 // Error. Entry couldn't be read. This should be logged
                 error!("Failed to create image file from entry");
                 return None;
@@ -80,7 +81,8 @@ impl Pack {
 
         let file_type = match unwrapped_entry.file_type() {
             Ok(ft) => ft,
-            Err(e) => {
+            //TODO Handle Better
+            Err(_e) => {
                 // Error: This should be handled or logged
                 error!("Failed to get file type");
                 return None;
@@ -108,10 +110,6 @@ impl Pack {
     }
 
     fn para_process(&self) -> Result<(), PDFConError> {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(self.threads)
-            .build_global()?;
-
         let term = console::Term::stdout();
 
         let directory = std::fs::read_dir(&self.in_directory)?;
@@ -134,7 +132,7 @@ impl Pack {
                 ProgressStyle::with_template(
                     format!("{{prefix}}: {{wide_bar}} {{pos}}/{{len}} ({{elapsed}})",).as_str(),
                 )
-                .unwrap(),
+                .unwrap_or(ProgressStyle::default_bar()),
             )
             .with_finish(indicatif::ProgressFinish::AndClear)
             .filter_map(|image_file| {
@@ -151,7 +149,8 @@ impl Pack {
                     // Just run optimize for now until we've created the unoptimized version
                     match self.read_file(image_file) {
                         Ok(bytes) => Some(bytes),
-                        Err(e) => {
+                        //TODO Handle better
+                        Err(_e) => {
                             // LOG and ignore
                             error!("Failed to read the file");
                             return None;
@@ -284,8 +283,7 @@ impl Pack {
                         operations: vec![cm_operation, do_operation],
                     };
 
-                    let content_id =
-                        doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+                    let content_id = doc.add_object(Stream::new(dictionary! {}, content.encode()?));
 
                     let page_id = doc.add_object(dictionary! {
                         "Type" => "Page",
@@ -332,6 +330,9 @@ impl Pack {
 
 impl Run for Pack {
     fn run(&self) -> Result<(), PDFConError> {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(self.threads)
+            .build_global()?;
         self.para_process()?;
         Ok(())
     }

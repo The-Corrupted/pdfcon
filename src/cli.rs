@@ -2,7 +2,7 @@ use crate::constants::physical_cores;
 use crate::pack::Pack;
 use crate::unpack::Unpack;
 use clap::{ArgAction, Command, arg, command, value_parser};
-use std::{ffi::OsStr, path::PathBuf};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PDFCon {

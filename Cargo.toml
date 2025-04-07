@@ -31,6 +31,7 @@ clap = { version = "4.5.34", features = [
     "usage",
 ], default-features = false }
 num_cpus = { version = "1.16.0" }
+thiserror = { version = "2.0.12" }
 
 [profile.release]
 panic = "unwind"

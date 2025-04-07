@@ -3,7 +3,6 @@ use std::io::{BufWriter, Write};
 use crate::error::PDFConError;
 use flate2::write::ZlibEncoder;
 use image::{ImageEncoder, codecs::png};
-use log::error;
 use oxipng;
 use std::path::PathBuf;
 
@@ -58,23 +57,28 @@ impl PDFConColorSpace {
     }
 }
 
-pub fn decompress_and_save_png(
-    content: &[u8],
-    page_num: u32,
-    width: u32,
-    height: u32,
-    color_space: PDFConColorSpace,
-    out_dir: &PathBuf,
-    optimize: bool,
-) -> Result<(), PDFConError> {
+pub fn decompress(content: &[u8]) -> Result<Vec<u8>, PDFConError> {
     let mut output = Vec::new();
     let out_writer = BufWriter::new(&mut output);
+
     let mut decompress =
         flate2::write::ZlibDecoder::new_with_decompress(out_writer, flate2::Decompress::new(true));
+
     decompress.write_all(&content)?;
     decompress.flush()?;
-
     let _ = decompress.finish()?;
+
+    Ok(output)
+}
+
+pub fn encode_and_save_png(
+    content: &[u8],
+    width: u32,
+    height: u32,
+    color_space: &PDFConColorSpace,
+    out_path: &PathBuf,
+    optimize: bool,
+) -> Result<(), PDFConError> {
     let mut encoded = Vec::new();
     let encoder_writer = BufWriter::new(&mut encoded);
 
@@ -84,41 +88,43 @@ pub fn decompress_and_save_png(
         png::FilterType::Adaptive,
     );
 
-    match encoder.write_image(&output, width, height, color_space.into_extended()) {
-        Ok(_) => {}
-        Err(_e) => {
-            error!("Failed to encode image");
-            return Err(PDFConError::ImageErrorMisc);
-        }
-    }
+    encoder.write_image(content, width, height, color_space.into_extended())?;
 
-    let options = oxipng::Options::default();
-    let file_name = format!("{:0>5}.png", page_num);
-    let file_path = out_dir.join(file_name);
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
-        .open(file_path)?;
+        .open(out_path)?;
+    let mut writer = BufWriter::new(file);
 
     if optimize {
-        match oxipng::optimize_from_memory(&encoded, &options) {
-            Ok(b) => {
-                let mut file_writer = BufWriter::new(file);
-                file_writer.write_all(&b)?;
-                file_writer.flush()?;
-                return Ok(());
-            }
-            Err(_e) => {
-                error!("Failed to optimize PNG size");
-                return Err(PDFConError::OxiPngOptimizeError);
-            }
-        }
+        let mut options = oxipng::Options::default();
+        options.strip = oxipng::StripChunks::All;
+        writer.write_all(&oxipng::optimize_from_memory(&encoded, &options)?)?;
+        writer.flush()?;
     } else {
-        let mut file_writer = BufWriter::new(file);
-        file_writer.write_all(&encoded)?;
-        file_writer.flush()?;
-        return Ok(());
+        writer.write_all(&encoded)?;
+        writer.flush()?;
     }
+
+    Ok(())
+}
+
+pub fn save_jpeg(content: &[u8], out_path: &PathBuf, optimize: bool) -> Result<(), PDFConError> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(out_path)?;
+    let mut writer = BufWriter::new(file);
+
+    let content = if optimize {
+        &optimize::optimize_jpeg_mem(content)?
+    } else {
+        &content.to_vec()
+    };
+    writer.write_all(&content)?;
+    writer.flush()?;
+
+    Ok(())
 }
 
 // Unless

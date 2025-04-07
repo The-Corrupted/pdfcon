@@ -1,11 +1,11 @@
+use crate::Run;
 use crate::constants::IGNORE_LIST;
 use crate::error::PDFConError;
-use crate::pdf_image::PDFConColorSpace;
 use crate::pdf_image::optimize::optimize_jpeg_mem;
-use crate::{Run, pack::ImageType};
-use indicatif::ParallelProgressIterator;
+use crate::pdf_image::{self, PDFConColorSpace};
+use indicatif::{ParallelProgressIterator, ProgressBar};
 use log::{debug, error};
-use lopdf::{Dictionary, Document, Object, ObjectId};
+use lopdf::{Dictionary, Document, Object};
 use rayon::prelude::*;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -42,6 +42,7 @@ pub fn filter_func(object_id: (u32, u16), object: &mut Object) -> Option<((u32, 
 impl Unpack {
     pub fn process_jpg(&self, page_num: u32, content: &Vec<u8>) -> Result<(), PDFConError> {
         // Save image
+        debug!("Processing JPEG");
         if self.optimize {
             let file_name = format!("{:0>5}.jpg", page_num);
             debug!("Saving: {}", file_name);
@@ -70,214 +71,170 @@ impl Unpack {
         Ok(())
     }
 
-    pub fn process_xobject(&self, doc: &Document, page_num: u32, reference: &Object) {
-        let ref_id = match reference.as_reference() {
-            Ok(d) => d,
-            Err(_e) => {
-                error!("Failed to get references id");
-                return;
-            }
-        };
+    fn process_xobject(
+        &self,
+        doc: &Document,
+        page_num: u32,
+        reference: &Object,
+    ) -> Result<(), PDFConError> {
+        debug!("Getting xobject information");
+        let ref_id = reference.as_reference()?;
 
-        let xobj = match doc.get_object(ref_id) {
-            Ok(d) => d,
-            Err(_e) => {
-                error!("Failed to get the xobject");
-                return;
-            }
-        };
+        debug!("Extracting stream");
+        let stream = doc.get_object(ref_id)?.as_stream()?;
 
-        let stream = match xobj.as_stream() {
-            Ok(d) => d,
-            Err(_e) => {
-                error!("Failed to get stream from xobject");
-                return;
-            }
-        };
+        debug!("Extracting subtype");
+        let subtype = stream.dict.get(b"Subtype")?.as_name()?;
 
-        let subtype = match stream.dict.get(b"Subtype") {
-            Ok(s) => s,
-            Err(_e) => {
-                error!("Failed to get stream subtype");
-                return;
-            }
-        };
+        debug!("Checking image");
+        if subtype != b"Image" {
+            // Not an image. No need to continue
+            return Ok(());
+        }
 
-        match subtype.as_name() {
-            Ok(name) => {
-                if name != b"Image" {
-                    debug!("subtype is not an image");
-                    return;
+        debug!("Grabbing filter");
+        let filters = match stream.dict.get(b"Filter") {
+            Ok(f) => {
+                let first = f.as_name();
+                if first.is_ok() {
+                    Some(vec![first.unwrap()])
+                } else {
+                    let second = f.as_str();
+                    if second.is_ok() {
+                        Some(vec![second.unwrap()])
+                    } else {
+                        let mut vec = Vec::new();
+                        for filter in f.as_array()? {
+                            vec.push(filter.as_name()?);
+                        }
+                        Some(vec)
+                    }
                 }
             }
-            Err(_e) => {
-                error!("Failed to get subtype as name");
-                return;
+            Err(_) => None,
+        };
+
+        match filters {
+            Some(filter_list) => {
+                // Filters are applied in reverse order from how they appear so
+                // we're going to reverse this and apply the filters as the appear.
+                // DCTDecode means this is a jpeg so we'll treat it as a jpeg. If DCT isn't present and only FlateDecode is
+                // present then that means we're likely dealing with a png and we'll treat it as a png.
+                // If no filter is present then that means some pdf builder sharted out raw pixel data into the
+                // document. They shouldn't do this ( ImageMagick ) but we probably aught to handle this it.
+                let mut is_jpeg = false;
+                // I'd prefer not to clone but we may have to do that here. We should see if it's possible not to
+                // duplicate the stream contents to process it
+                let mut content = stream.content.clone();
+                for filter in filter_list.into_iter().rev() {
+                    if filter == b"DCTDecode" {
+                        is_jpeg = true;
+                    } else if filter == b"FlateDecode" {
+                        content = pdf_image::decompress(&content)?;
+                    }
+                }
+                let path = self.out_directory.join(format!(
+                    "{:0>5}.{}",
+                    page_num,
+                    if is_jpeg { "jpg" } else { "png" }
+                ));
+
+                if is_jpeg {
+                    pdf_image::save_jpeg(&content, &path, self.optimize)?
+                } else {
+                    let width = stream.dict.get(b"Width")?.as_i64()? as u32;
+                    let height = stream.dict.get(b"Height")?.as_i64()? as u32;
+                    let bits = stream.dict.get(b"BitsPerComponent")?.as_i64()? as u8;
+                    let color_enum = PDFConColorSpace::from_pdf_format((
+                        stream.dict.get(b"ColorSpace")?.as_name()?,
+                        bits,
+                    ));
+
+                    pdf_image::encode_and_save_png(
+                        &content,
+                        width,
+                        height,
+                        &color_enum,
+                        &path,
+                        self.optimize,
+                    )?
+                }
+            }
+            None => {
+                // This is a raw pixel buffer. We can encode this in any format we'd like
+                debug!("Raw pixel buffer. Curerntly unimplemented");
             }
         }
 
-        let filter = match stream.dict.get(b"Filter") {
-            Ok(d) => d,
-            Err(_e) => {
-                error!("Failed to get stream filter");
-                return;
-            }
-        };
-
-        let filter_name = match filter.as_name() {
-            Ok(d) => d,
-            Err(_e) => {
-                error!("Failed to convert to filter name");
-                return;
-            }
-        };
-
-        if filter_name == b"DCTDecode".to_vec() {
-            // Process JPEG image
-            match self.process_jpg(page_num, &stream.content) {
-                Ok(()) => {}
-                Err(e) => {
-                    error!("Failed to write image contents to file: {}", e.to_string());
-                }
-            }
-            return;
-        }
-
-        if filter_name == b"FlateDecode".to_vec() {
-            // Process PNG image
-            // We need more information to re-encode this. Grab the width, height and color_type
-            let width_obj = match stream.dict.get(b"Width") {
-                Ok(w) => w,
-                Err(_e) => {
-                    error!("Failed to get png width object");
-                    return;
-                }
-            };
-
-            let width = match width_obj.as_i64() {
-                Ok(i) => i,
-                Err(_e) => {
-                    error!("Failed to convert width to integer");
-                    return;
-                }
-            };
-
-            let height_obj = match stream.dict.get(b"Height") {
-                Ok(h) => h,
-                Err(_e) => {
-                    error!("Failed to get png height object");
-                    return;
-                }
-            };
-
-            let height = match height_obj.as_i64() {
-                Ok(i) => i,
-                Err(_e) => {
-                    error!("Failed to convert height to integer");
-                    return;
-                }
-            };
-
-            let bits_obj = match stream.dict.get(b"BitsPerComponent") {
-                Ok(b) => b,
-                Err(_e) => {
-                    error!("Failed to get bits per component");
-                    return;
-                }
-            };
-
-            let bits = match bits_obj.as_i64() {
-                Ok(i) => i,
-                Err(_e) => {
-                    error!("Failed to convert bits obj to integer");
-                    return;
-                }
-            };
-
-            let color_obj = match stream.dict.get(b"ColorSpace") {
-                Ok(s) => s,
-                Err(_e) => {
-                    error!("Failed to get png color object");
-                    return;
-                }
-            };
-
-            let color_obj_enum = match color_obj.as_name() {
-                Ok(s) => PDFConColorSpace::from_pdf_format((s, bits as u8)),
-                Err(_e) => {
-                    error!("Failed to get color enum");
-                    return;
-                }
-            };
-
-            match crate::pdf_image::decompress_and_save_png(
-                &stream.content,
-                page_num,
-                width as u32,
-                height as u32,
-                color_obj_enum,
-                &self.out_directory,
-                self.optimize,
-            ) {
-                Ok(_) => {}
-                Err(_e) => {
-                    error!("Failed to encode and save png");
-                    return;
-                }
-            }
-        }
+        Ok(())
     }
 
-    pub fn find_xobject_images_in_page(
+    fn find_xobject_images_in_page(
         &self,
         doc: &Document,
         page_num: u32,
         page_dict: &Dictionary,
-    ) {
-        if let Ok(resources_obj) = page_dict.get(b"Resources") {
-            if let Ok(resources_dict) = resources_obj.as_dict() {
-                if let Ok(x_obj) = resources_dict.get(b"XObject") {
-                    if let Ok(x_obj_dict) = x_obj.as_dict() {
-                        for (_name, x_ref) in x_obj_dict.iter() {
-                            self.process_xobject(&doc, page_num, &x_ref);
-                        }
-                    } else {
-                        error!("Failed to convert xobject to dict");
-                    }
-                } else {
-                    error!("Failed to get xobject");
-                }
-            } else {
-                error!("Failed to convert resources object to dict");
-            }
-        } else {
-            error!("Failed to get resources object");
+    ) -> Result<(), PDFConError> {
+        debug!("Getting resources and xobjects");
+        let resources_dict = page_dict.get(b"Resources")?.as_dict()?;
+        let x_obj_dict = resources_dict.get(b"XObject")?.as_dict()?;
+        for (_name, x_ref) in x_obj_dict.iter() {
+            self.process_xobject(&doc, page_num, &x_ref)?;
         }
+        Ok(())
     }
 
-    pub fn extract_images(&self, doc: &Document) {
-        doc.get_pages()
+    fn extract_images(&self, doc: &Document) -> Result<(), PDFConError> {
+        let results: Vec<Result<(), PDFConError>> = doc
+            .get_pages()
             .into_par_iter()
             .collect::<Vec<_>>()
             .par_iter()
             .progress()
-            .for_each(|(page_num, page_id)| {
-                if let Ok(page) = doc.get_object(*page_id) {
-                    if let Ok(page_dict) = page.as_dict() {
-                        self.find_xobject_images_in_page(&doc, *page_num, &page_dict);
-                    }
-                } else {
-                    error!("Failed to get page object");
+            .map(|(page_num, page_id)| {
+                debug!("Getting page dict");
+                let page_dict = doc.get_object(*page_id)?.as_dict()?;
+                self.find_xobject_images_in_page(&doc, *page_num, &page_dict)?;
+                Ok(())
+            })
+            .collect();
+
+        // Log any errors and return a general error
+        let mut error_encountered = false;
+        for result in results {
+            match result {
+                Ok(()) => {}
+                Err(e) => {
+                    error_encountered = true;
+                    error!("Failed to extract image from page: {{{}}}", e.to_string())
                 }
-            });
+            }
+        }
+        if error_encountered {
+            return Err(PDFConError::UnpackError);
+        }
+        Ok(())
     }
 }
 
 impl Run for Unpack {
     fn run(&self) -> Result<(), PDFConError> {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(self.threads)
+            .build_global()?;
         std::fs::create_dir_all(&self.out_directory)?;
-        let document = Document::load_filtered(&self.in_file, filter_func).unwrap();
-        self.extract_images(&document);
+        // This takes forever to complete and there is a possibility that it fails. Display a progressbar spinner while it runs
+        let pb_spinner = ProgressBar::new_spinner()
+            .with_style(
+                indicatif::ProgressStyle::with_template("{prefix}: {spinner}")
+                    .unwrap_or(indicatif::ProgressStyle::default_spinner())
+                    .tick_chars("▉▊▋▌▍▎▏▎▍▌▋▊▉"),
+            )
+            .with_prefix("Parsing PDF");
+        pb_spinner.enable_steady_tick(std::time::Duration::from_millis(500));
+        let document = Document::load_filtered(&self.in_file, filter_func)?;
+        pb_spinner.finish();
+        self.extract_images(&document)?;
 
         Ok(())
     }
