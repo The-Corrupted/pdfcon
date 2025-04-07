@@ -2,6 +2,7 @@
 name = "pdfcon"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
 
 [dependencies]
 env_logger = { version = "0.11.8", features = [
@@ -32,6 +33,16 @@ clap = { version = "4.5.34", features = [
 ], default-features = false }
 num_cpus = { version = "1.16.0" }
 thiserror = { version = "2.0.12" }
+clap_complete = { version = "4.5.47" }
+
+[build-dependencies]
+clap_complete = { version = "4.5.47" }
+clap = { version = "4.5.34", features = [
+    "cargo",
+    "color",
+    "help",
+    "usage",
+], default-features = false }
 
 [profile.release]
 panic = "unwind"
